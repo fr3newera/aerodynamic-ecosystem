@@ -20,7 +20,7 @@
 set -e
 
 PANEL_DIR="/var/www/pterodactyl"
-THEME_URL="https://github.com/aerodynamic-ecosystem/auto.sh/releases/latest/download/auto.tar.gz"
+THEME_URL="https://raw.githubusercontent.com/aerodynamic-ecosystem/auto.sh/main/auto.tar.gz"
 BACKUP_DIR="/root/pterodactyl-backup-$(date +%Y%m%d-%H%M%S)"
 TMP_DIR="$(mktemp -d)"
 
