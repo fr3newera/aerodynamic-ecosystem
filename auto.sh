@@ -9,8 +9,25 @@ set -e
 
 PANEL_DIR="/var/www/pterodactyl"
 THEME_URL="https://raw.githubusercontent.com/fr3newera/aerodynamic-ecosystem/main/auto.tar.gz"
+SCRIPT_URL="https://raw.githubusercontent.com/fr3newera/aerodynamic-ecosystem/main/auto.sh"
 BACKUP_DIR="/root/pterodactyl-backup-$(date +%Y%m%d-%H%M%S)"
 TMP_DIR="$(mktemp -d)"
+
+# ---- Self-update ----
+# Setiap kali script ini dijalankan (termasuk lewat curl | bash), ia otomatis
+# mengambil versi terbaru auto.sh dari GitHub lalu menjalankan versi itu,
+# supaya perbaikan/patch terbaru (misalnya fix migration di bawah) selalu
+# ikut terpakai tanpa perlu update manual. AUTO_SH_NO_SELF_UPDATE mencegah loop.
+if [ -z "$AUTO_SH_NO_SELF_UPDATE" ]; then
+  LATEST_TMP="$(mktemp)"
+  if curl -fsSL "$SCRIPT_URL" -o "$LATEST_TMP" 2>/dev/null && [ -s "$LATEST_TMP" ]; then
+    echo "Mengecek update... menjalankan versi terbaru dari GitHub."
+    export AUTO_SH_NO_SELF_UPDATE=1
+    exec bash "$LATEST_TMP" "$@"
+  fi
+  rm -f "$LATEST_TMP" 2>/dev/null || true
+  echo "  (Gagal cek update, lanjut pakai versi lokal.)"
+fi
 
 fail() {
   echo ""
@@ -79,9 +96,23 @@ echo "  OK."
 
 echo ""
 echo "[5/7] Fix & patch file migration..."
-# Auto patch tipe data kolom foreign key pada file migration registration_codes jika ada
-find "$PANEL_DIR/database/migrations" -type f -name "*create_registration_codes_table.php" -exec sed -i "s/unsignedInteger('used_by_user_id')/unsignedBigInteger('used_by_user_id')/g" {} +
-find "$PANEL_DIR/database/migrations" -type f -name "*create_registration_codes_table.php" -exec sed -i "s/integer('used_by_user_id')/unsignedBigInteger('used_by_user_id')/g" {} +
+# users.id di Pterodactyl adalah INT UNSIGNED (bukan BIGINT), jadi kolom FK harus
+# unsignedInteger + foreign() biasa. Pakai foreignId()/foreignIdFor() akan bikin
+# BIGINT UNSIGNED dan gagal (errno 150) karena tipe tidak cocok dengan users.id.
+REG_MIGRATION=$(find "$PANEL_DIR/database/migrations" -type f -name "*create_registration_codes_table.php" | head -n1)
+if [ -n "$REG_MIGRATION" ]; then
+  # Ganti foreignId('xxx')->...->constrained('users')->yyy()  ->  unsignedInteger + foreign() terpisah
+  perl -0pi -e "s/\\\$table->foreignId\('(\w+)'\)((?:->\w+\([^)]*\))*)->constrained\('users'\)((?:->\w+\([^)]*\))*);/\\\$table->unsignedInteger('\1')\2;/g" "$REG_MIGRATION"
+  # Normalisasi jika sebelumnya sempat ke-set sebagai bigint
+  sed -i "s/unsignedBigInteger('used_by_user_id')/unsignedInteger('used_by_user_id')/g" "$REG_MIGRATION"
+  sed -i "s/unsignedBigInteger('created_by_user_id')/unsignedInteger('created_by_user_id')/g" "$REG_MIGRATION"
+  # Pastikan constraint foreign key ke users.id ditambahkan (idempotent)
+  for COL in used_by_user_id created_by_user_id; do
+    if ! grep -q "foreign('$COL')" "$REG_MIGRATION"; then
+      sed -i "/\$table->timestamps();/i\\            \$table->foreign('$COL')->references('id')->on('users')->nullOnDelete();" "$REG_MIGRATION"
+    fi
+  done
+fi
 echo "  OK."
 
 echo ""
