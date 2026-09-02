@@ -2,25 +2,13 @@
 #
 # ==============================================================
 #  Pterodactyl Theme Installer
-#  Repo: https://github.com/aerodynamic-ecosystem/auto.sh
-# ==============================================================
-#
-#  Script ini akan:
-#   1. Backup folder panel Pterodactyl kamu saat ini
-#   2. Download & extract auto.tar.gz (source tema)
-#   3. Replace file tema (views, public assets, resources, app, database)
-#   4. Jalankan composer install, migration, dan clear cache
-#   5. Build frontend (yarn/npm)
-#
-#  Penggunaan:
-#    curl -fsSL https://github.com/aerodynamic-ecosystem/auto.sh/releases/latest/download/auto.sh | bash
-#
+#  Repo: https://github.com/fr3newera/aerodynamic-ecosystem
 # ==============================================================
 
 set -e
 
 PANEL_DIR="/var/www/pterodactyl"
-THEME_URL="https://raw.githubusercontent.com/aerodynamic-ecosystem/auto.sh/main/auto.tar.gz"
+THEME_URL="https://raw.githubusercontent.com/fr3newera/aerodynamic-ecosystem/main/auto.tar.gz"
 BACKUP_DIR="/root/pterodactyl-backup-$(date +%Y%m%d-%H%M%S)"
 TMP_DIR="$(mktemp -d)"
 
@@ -61,7 +49,16 @@ echo "  OK."
 
 echo ""
 echo "[3/6] Copy file tema ke panel..."
-echo "  (Tidak menimpa .env, storage/framework, storage/logs, vendor, node_modules)"
+
+# Jika isi archive terbungkus dalam folder utama, pindah ke folder tersebut
+SRC_DIR="$TMP_DIR/extracted"
+if [ ! -d "$SRC_DIR/app" ] && [ $(ls -1 "$SRC_DIR" | wc -l) -eq 1 ]; then
+  SUBFOLDER=$(ls -1 "$SRC_DIR")
+  if [ -d "$SRC_DIR/$SUBFOLDER/app" ]; then
+    SRC_DIR="$SRC_DIR/$SUBFOLDER"
+  fi
+fi
+
 rsync -a \
   --exclude ".env" \
   --exclude "storage/framework/" \
@@ -69,7 +66,7 @@ rsync -a \
   --exclude "vendor/" \
   --exclude "node_modules/" \
   --exclude ".git/" \
-  "$TMP_DIR/extracted/" "$PANEL_DIR/" || fail "Gagal menyalin file tema"
+  "$SRC_DIR/" "$PANEL_DIR/" || fail "Gagal menyalin file tema"
 echo "  OK."
 
 echo ""
