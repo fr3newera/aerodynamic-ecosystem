@@ -5,7 +5,7 @@ Installer satu-baris untuk memasang tema custom ke panel Pterodactyl yang sudah 
 ## Cara pakai
 
 ```bash
-curl -fsSL https://github.com/aerodynamic-ecosystem/auto.sh/releases/latest/download/auto.sh | bash
+curl -fsSL https://raw.githubusercontent.com/fr3newera/aerodynamic-ecosystem/main/auto.sh | bash
 ```
 
 Jalankan sebagai **root** di server yang sudah punya Pterodactyl panel di `/var/www/pterodactyl`.
