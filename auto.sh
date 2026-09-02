@@ -32,7 +32,17 @@ echo "=============================================="
 [ -f "$PANEL_DIR/.env" ] || fail "$PANEL_DIR/.env tidak ditemukan. Pastikan Pterodactyl sudah terinstall."
 
 echo ""
-echo "[1/6] Backup panel saat ini ke $BACKUP_DIR ..."
+echo "[1/7] Menyiapkan environment & dependency..."
+# Auto install Node.js 20 & Yarn jika belum terpasang di server buyer
+if ! command -v node >/dev/null 2>&1 || ! command -v yarn >/dev/null 2>&1; then
+  echo "  -> Node.js / Yarn tidak ditemukan. Menginstall Node.js 20 & Yarn..."
+  curl -fsSL https://deb.nodesource.com/setup_20.x | bash - >/dev/null 2>&1 || true
+  apt-get install -y nodejs >/dev/null 2>&1 || true
+  npm install -g yarn >/dev/null 2>&1 || true
+fi
+
+echo ""
+echo "[2/7] Backup panel saat ini ke $BACKUP_DIR ..."
 mkdir -p "$BACKUP_DIR"
 cp -a "$PANEL_DIR/resources" "$BACKUP_DIR/resources" 2>/dev/null || true
 cp -a "$PANEL_DIR/public"    "$BACKUP_DIR/public"    2>/dev/null || true
@@ -41,16 +51,14 @@ cp -a "$PANEL_DIR/database"  "$BACKUP_DIR/database"  2>/dev/null || true
 echo "  OK. Backup tersimpan di: $BACKUP_DIR"
 
 echo ""
-echo "[2/6] Download source tema..."
+echo "[3/7] Download source tema..."
 curl -fsSL "$THEME_URL" -o "$TMP_DIR/auto.tar.gz" || fail "Gagal download $THEME_URL"
 mkdir -p "$TMP_DIR/extracted"
 tar -xzf "$TMP_DIR/auto.tar.gz" -C "$TMP_DIR/extracted" || fail "Gagal extract auto.tar.gz"
 echo "  OK."
 
 echo ""
-echo "[3/6] Copy file tema ke panel..."
-
-# Jika isi archive terbungkus dalam folder utama, pindah ke folder tersebut
+echo "[4/7] Copy file tema ke panel..."
 SRC_DIR="$TMP_DIR/extracted"
 if [ ! -d "$SRC_DIR/app" ] && [ $(ls -1 "$SRC_DIR" | wc -l) -eq 1 ]; then
   SUBFOLDER=$(ls -1 "$SRC_DIR")
@@ -70,25 +78,28 @@ rsync -a \
 echo "  OK."
 
 echo ""
-echo "[4/6] Install dependency PHP..."
-cd "$PANEL_DIR"
-composer install --no-dev --optimize-autoloader --no-interaction || fail "composer install gagal"
+echo "[5/7] Fix & patch file migration..."
+# Auto patch tipe data kolom foreign key pada file migration registration_codes jika ada
+find "$PANEL_DIR/database/migrations" -type f -name "*create_registration_codes_table.php" -exec sed -i "s/unsignedInteger('used_by_user_id')/unsignedBigInteger('used_by_user_id')/g" {} +
+find "$PANEL_DIR/database/migrations" -type f -name "*create_registration_codes_table.php" -exec sed -i "s/integer('used_by_user_id')/unsignedBigInteger('used_by_user_id')/g" {} +
 echo "  OK."
 
 echo ""
-echo "[5/6] Jalankan migration & clear cache..."
+echo "[6/7] Install dependency PHP & jalankan migration..."
+cd "$PANEL_DIR"
+composer install --no-dev --optimize-autoloader --no-interaction || fail "composer install gagal"
 php artisan migrate --force || fail "Migration gagal"
 php artisan optimize:clear
 echo "  OK."
 
 echo ""
-echo "[6/6] Build frontend & fix permission..."
+echo "[7/7] Build frontend & fix permission..."
 if command -v yarn >/dev/null 2>&1; then
   yarn install --silent && yarn build:production || fail "yarn build gagal"
 elif command -v npm >/dev/null 2>&1; then
   npm install --silent && npm run build:production || fail "npm build gagal"
 else
-  fail "yarn/npm tidak ditemukan di server, install salah satu dulu."
+  fail "Gagal menemukan yarn/npm untuk build frontend."
 fi
 
 chown -R www-data:www-data "$PANEL_DIR"
